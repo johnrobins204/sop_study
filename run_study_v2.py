@@ -562,6 +562,60 @@ def write_result_row_to_csv(log_filename, row, columns):
             out = {c: row.get(c, "") for c in columns}
             writer.writerow(out)
 
+def load_judge_prompt(filepath="config/judge_sop.json"):
+    """Loads the judge prompt template from a JSON file."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"--- FATAL ERROR --- \nJudge prompt file not found at '{filepath}'.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"--- FATAL ERROR --- \nFailed to load judge prompt file. Error: {e}")
+        sys.exit(1)
+
+def get_or_create_judge_prompt_cache(filepath="config/judge_sop.json"):
+    """
+    Create a cache entry for the judge prompt template (if not existing) and return a stable cache_id.
+    Uses the same master cache logic as document caching.
+    """
+    try:
+        # Load the judge prompt content
+        with open(filepath, 'r', encoding='utf-8') as f:
+            judge_prompt_content = f.read()
+
+        # Compute the hash of the content
+        cache_id = _compute_cache_id(judge_prompt_content)
+
+        # Check if the cache ID exists in the master cache
+        master_cache = _load_master_cache()
+        if cache_id in master_cache:
+            print(f"✅ Judge prompt template already cached with ID: {master_cache[cache_id]['provider_id']}")
+            return master_cache[cache_id]['provider_id']
+
+        # If not cached, upload the judge prompt to the provider
+        provider_id = _register_with_provider(judge_prompt_content, metadata={"type": "judge_prompt"})
+        if provider_id:
+            # Store the provider ID in the master cache
+            master_cache[cache_id] = {
+                "provider_id": provider_id,
+                "metadata": {"type": "judge_prompt"},
+                "local_path": filepath,
+                "ingested_at": datetime.utcnow().isoformat() + "Z"
+            }
+            _save_master_cache()
+            print(f"✅ Judge prompt template cached with new ID: {provider_id}")
+            return provider_id
+        else:
+            print(f"--- WARNING --- \nFailed to cache judge prompt template with the provider.")
+            return None
+    except FileNotFoundError:
+        print(f"--- FATAL ERROR --- \nJudge prompt file not found at '{filepath}'.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"--- FATAL ERROR --- \nFailed to process judge prompt file. Error: {e}")
+        sys.exit(1)
+
 def main():
     # Load config first so behavior (auto_judge etc.) is available immediately.
     load_config()
@@ -572,6 +626,22 @@ def main():
         setup_google_api_client()
     else:
         print("[INFO] auto_judge disabled in config; skipping judge client setup.")
+
+    # Cache the judge prompt template and get its cache ID
+    judge_prompt_cache_id = get_or_create_judge_prompt_cache("config/judge_sop.json")
+    print(f"✅ Judge prompt cache ID: {judge_prompt_cache_id}")
+
+    # Load the judge prompt template content
+    judge_prompt_template = None
+    try:
+        with open("config/judge_sop.json", "r", encoding="utf-8") as f:
+            judge_prompt_template = f.read()
+    except FileNotFoundError:
+        print("--- FATAL ERROR --- \nJudge prompt file not found at 'config/judge_sop.json'.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"--- FATAL ERROR --- \nFailed to load judge prompt file. Error: {e}")
+        sys.exit(1)
 
     dataset = load_questions_from_json("questions.json")
 
@@ -653,16 +723,30 @@ def main():
                 pass
 
         def _run_judge_and_update(problem_id, test_name, question, model_answer, judge_prompt):
+            """
+            Run the judge evaluation and update the results.
+            """
             try:
+                # Evaluate the model answer using the provided judge prompt
                 eval_metrics = evaluate_with_llm_judge(question, model_answer, judge_prompt=judge_prompt)
             except Exception as e:
-                eval_metrics = {"raw_judge_response": "", "score_faithfulness_rating": None,
-                                "score_faithfulness_justification": "", "score_correctness_rating": None,
-                                "score_correctness_justification": "", "score_completeness_rating": None,
-                                "score_completeness_justification": "", "score_clarity_rating": None,
-                                "score_clarity_justification": "", "score_citation_following_rating": None,
-                                "score_citation_following_justification": "", "judge_error": str(e)}
+                # Handle errors during evaluation
+                eval_metrics = {
+                    "raw_judge_response": "",
+                    "score_faithfulness_rating": None,
+                    "score_faithfulness_justification": "",
+                    "score_correctness_rating": None,
+                    "score_correctness_justification": "",
+                    "score_completeness_rating": None,
+                    "score_completeness_justification": "",
+                    "score_clarity_rating": None,
+                    "score_clarity_justification": "",
+                    "score_citation_following_rating": None,
+                    "score_citation_following_justification": "",
+                    "judge_error": str(e)
+                }
 
+            # Prepare the values to update in the results file
             update_values = {
                 'judge_prompt': judge_prompt,
                 'raw_judge_response': eval_metrics.get('raw_judge_response'),
@@ -678,290 +762,199 @@ def main():
                 'score_citation_following_justification': eval_metrics.get('score_citation_following_justification'),
             }
 
+            # Update the results file with the evaluation metrics
             with file_lock:
                 try:
+                    # Load the results file
                     df = pd.read_csv(log_filename, comment="#")
-                    # Ensure textual columns are object dtype so assigning strings won't fail.
-                    text_cols = [
-                        'prompt_used', 'generation_parameters', 'raw_model_output',
-                        'judge_prompt', 'raw_judge_response',
-                        'score_faithfulness_justification', 'score_correctness_justification',
-                        'score_completeness_justification', 'score_clarity_justification',
-                        'score_citation_following_justification', 'source_papers', 'question', 'error'
-                    ]
-                    for c in text_cols:
-                        if c in df.columns:
-                            try:
-                                df[c] = df[c].astype(object)
-                            except Exception:
-                                df[c] = df[c].where(df[c].notna(), "").astype(object)
-                except Exception:
-                    base_row = {
-                        'problem_id': problem_id,
-                        'test_name': test_name,
-                        'ablation_condition': '',
-                        'model_name': '',
-                        'model_version': '',
-                        'api_type': '',
-                        'api_version': '',
-                        'sop_template_file': '',
-                        'prompt_used': '',
-                        'generation_parameters': '',
-                        'raw_model_output': model_answer,
-                        'source_papers': '',
-                        'question': question,
-                        'error': '',
-                        'api_latency_ms': None,
-                        'judge_prompt': update_values['judge_prompt'],
-                        'raw_judge_response': update_values['raw_judge_response'],
-                        'score_faithfulness_rating': update_values['score_faithfulness_rating'],
-                        'score_faithfulness_justification': update_values['score_faithfulness_justification'],
-                        'score_correctness_rating': update_values['score_correctness_rating'],
-                        'score_correctness_justification': update_values['score_correctness_justification'],
-                        'score_completeness_rating': update_values['score_completeness_rating'],
-                        'score_completeness_justification': update_values['score_completeness_justification'],
-                        'score_clarity_rating': update_values['score_clarity_rating'],
-                        'score_clarity_justification': update_values['score_clarity_justification'],
-                        'score_citation_following_rating': update_values['score_citation_following_rating'],
-                        'score_citation_following_justification': update_values['score_citation_following_justification']
-                    }
-                    pd.DataFrame([base_row]).to_csv(log_filename, mode='a', header=False, index=False)
-                    return
+                    mask = (df['problem_id'] == problem_id) & (df['test_name'] == test_name)
 
-                mask = (df['problem_id'] == problem_id) & (df['test_name'] == test_name)
-                if not mask.any():
-                    new_row = {
-                        'problem_id': problem_id,
-                        'test_name': test_name,
-                        'ablation_condition': '',
-                        'model_name': '',
-                        'model_version': '',
-                        'api_type': '',
-                        'api_version': '',
-                        'sop_template_file': '',
-                        'prompt_used': '',
-                        'generation_parameters': '',
-                        'raw_model_output': model_answer,
-                        'source_papers': '',
-                        'question': question,
-                        'error': '',
-                        'api_latency_ms': None,
-                        'judge_prompt': update_values['judge_prompt'],
-                        'raw_judge_response': update_values['raw_judge_response'],
-                        'score_faithfulness_rating': update_values['score_faithfulness_rating'],
-                        'score_faithfulness_justification': update_values['score_faithfulness_justification'],
-                        'score_correctness_rating': update_values['score_correctness_rating'],
-                        'score_correctness_justification': update_values['score_correctness_justification'],
-                        'score_completeness_rating': update_values['score_completeness_rating'],
-                        'score_completeness_justification': update_values['score_completeness_justification'],
-                        'score_clarity_rating': update_values['score_clarity_rating'],
-                        'score_clarity_justification': update_values['score_clarity_justification'],
-                        'score_citation_following_rating': update_values['score_citation_following_rating'],
-                        'score_citation_following_justification': update_values['score_citation_following_justification']
-                    }
-                    pd.DataFrame([new_row]).to_csv(log_filename, mode='a', header=False, index=False)
-                    return
+                    # If the row does not exist, create a new one
+                    if not mask.any():
+                        new_row = {
+                            'problem_id': problem_id,
+                            'test_name': test_name,
+                            'ablation_condition': '',
+                            'model_name': '',
+                            'model_version': '',
+                            'api_type': '',
+                            'api_version': '',
+                            'sop_template_file': '',
+                            'prompt_used': '',
+                            'generation_parameters': '',
+                            'raw_model_output': model_answer,
+                            'source_papers': '',
+                            'question': question,
+                            'error': '',
+                            'api_latency_ms': None,
+                            'judge_prompt': update_values['judge_prompt'],
+                            'raw_judge_response': update_values['raw_judge_response'],
+                            'score_faithfulness_rating': update_values['score_faithfulness_rating'],
+                            'score_faithfulness_justification': update_values['score_faithfulness_justification'],
+                            'score_correctness_rating': update_values['score_correctness_rating'],
+                            'score_correctness_justification': update_values['score_correctness_justification'],
+                            'score_completeness_rating': update_values['score_completeness_rating'],
+                            'score_completeness_justification': update_values['score_completeness_justification'],
+                            'score_clarity_rating': update_values['score_clarity_rating'],
+                            'score_clarity_justification': update_values['score_clarity_justification'],
+                            'score_citation_following_rating': update_values['score_citation_following_rating'],
+                            'score_citation_following_justification': update_values['score_citation_following_justification']
+                        }
+                        pd.DataFrame([new_row]).to_csv(log_filename, mode='a', header=False, index=False)
+                        return
 
-                idx = df.index[mask][0]
-                for col, val in update_values.items():
-                    if col in df.columns:
-                        df.at[idx, col] = val
-                df.to_csv(log_filename, index=False)
-
-    for item in tqdm(dataset, desc="Processing All Problems"):
-        source_papers_list = item.get("source_papers", [])
-
-        for ablation_name, ablation_config in ablation_classes.items():
-            pair_key = (item['problem_id'], ablation_name)
-            if pair_key in completed_pairs:
-                continue
-
-            model_name = ablation_config["model_name"]
-            api_type = ablation_config.get("api_type", "google")
-            sop_template_file = ablation_config.get("sop_template_file", "") or ""
-            ablation_condition = ablation_config.get("description", ablation_name)
-            model_version = ablation_config.get("model_version", "")
-            api_version = ablation_config.get("api_version", "")
-
-            # Load SOP content only if a sop_template_file is provided.
-            # Control classes may not provide a template_file and that's fine.
-            sop_content = ""
-            if sop_template_file:
-                try:
-                    if sop_template_file.lower().endswith(".json"):
-                        sop_template_obj = load_sop_template(sop_template_file)
-                        sop_content = json.dumps(sop_template_obj, indent=2, ensure_ascii=False)
-
-                        # === CHANGED: use single variant derived from config ===
-                        # The study config now controls which SOP prompt format to use.
-                        # Prefer ablation_config["sop_variant"], then CONFIG["default_sop_variant"],
-                        # and fall back to "json_original".
-                        chosen_variant = ablation_config.get(
-                            "sop_variant",
-                            CONFIG.get("default_sop_variant", "json_original")
-                        )
-
-                        if chosen_variant == "json_with_grounding_prefix":
-                            variant_content = "Treat the following JSON as a grounding object:\n" + sop_content
-                            variant_suffix = "json_with_grounding_prefix"
-                        else:
-                            # default and any other values fall back to the raw JSON template
-                            variant_content = sop_content
-                            variant_suffix = "json_original"
-
-                        template_variants = [(variant_suffix, variant_content)]
-                    else:
-                        with open(sop_template_file, "r", encoding="utf-8") as f:
-                            sop_content = f.read()
-                        template_variants = [("txt_original", sop_content)]
-                except FileNotFoundError:
-                    print(f"--- WARNING --- \nSOP template file not found for '{ablation_name}': '{sop_template_file}'. Skipping this ablation.")
-                    continue
+                    # Update the existing row
+                    idx = df.index[mask][0]
+                    for col, val in update_values.items():
+                        if col in df.columns:
+                            # Ensure compatibility with the column's data type
+                            if pd.api.types.is_numeric_dtype(df[col]):
+                                try:
+                                    # Convert to numeric if possible, otherwise set to NaN
+                                    df.at[idx, col] = pd.to_numeric(val, errors='coerce')
+                                except Exception:
+                                    df.at[idx, col] = None  # Assign None for incompatible values
+                            else:
+                                # For non-numeric columns, assign the value directly
+                                df.at[idx, col] = val
+                    df.to_csv(log_filename, index=False)
                 except Exception as e:
-                    print(f"--- WARNING --- \nError loading SOP template for '{ablation_name}': {e}. Skipping.")
-                    continue
-            else:
-                # No template provided (e.g., control). Use a single empty/text-only variant.
-                template_variants = [("no_sop", "")]
+                    print(f"[JUDGE] Failed to update results file: {e}")
 
-            for variant_suffix, variant_sop_content in template_variants:
-                pair_key = (item['problem_id'], f"{ablation_name}::{variant_suffix}")
-                if pair_key in completed_pairs:
-                    continue
+    # Initialize the generator progress bar (position=0 for the top bar)
+    generator_pbar = tqdm(total=len(dataset) * CONFIG["iters"], desc="Generator Tasks", position=0)
 
-                # prepare source text / cache
-                source_text = load_source_text_for_papers(source_papers_list)
-                cache_id = ""
-                if CONFIG.get("use_doc_cache", True) and source_text:
-                    # create local cache entry (and optionally push to provider-side cache if enabled)
-                    cache_id = get_or_create_doc_cache(
-                        source_text,
-                        metadata={"problem_id": item['problem_id'], "source_papers": source_papers_list},
-                        push_to_api=CONFIG.get("use_api_document_cache", False)
-                    )
+    # Initialize the judge progress bar (position=1 for the bottom bar)
+    if auto_judge:
+        judge_pbar = tqdm(total=0, desc="Judge Tasks", position=1)
 
-                # Build prompt: if cache_id available, include compact marker; otherwise include provided SOP + question (no heavy source text)
-                cache_marker = f"[DOCUMENT_CACHE_ID:{cache_id}]\n\n" if cache_id else ""
-                prompt_str = (
-                    f"{cache_marker}{variant_sop_content}\n\n---\n"
-                    f"**USER'S QUESTION:**\n{item['question']}\n\n---\n\n"
-                    "Based on the instructions in the JSON object, synthesize an answer to the user's question."
-                )
+    for iteration in range(CONFIG["iters"]):  # Outer loop for iterations
+        for obs_index, item in enumerate(dataset[:CONFIG["obs"]]):  # Loop over observations
+            source_papers_list = item.get("source_papers", [])
 
-                if api_type == "ollama":
-                    response_data = generate_ollama_response(model_name, prompt_str, cache_id=cache_id)
-                else:
-                    response_data = generate_google_response(model_name, prompt_str, cache_id=cache_id)
+            for ablation_name, ablation_config in ablation_classes.items():  # Loop over test cases
+                # Load SOP template file for the current ablation
+                sop_template_file = ablation_config.get("sop_template_file", "")
+                template_variants = []
 
-                if response_data.get("error"):
-                    # log API errors to CSV only; suppress in-loop stdout
-                    # (kept for debugging if needed)
-                    # print(f"[API ERROR] Problem ID: {item['problem_id']} Ablation: {ablation_name} Variant: {variant_suffix} Error: {response_data.get('error')}")
-                    pass
-
-                judge_prompt_template = (
-                    "You are an evaluator. Given the QUESTION and the MODEL ANSWER below, "
-                    "produce a concise JSON evaluation between <<JUDGE_JSON>> and <</JUDGE_JSON>> with the following keys:\n"
-                    " - faithfulness: integer 1-5\n"
-                    " - justification_faithfulness: text\n"
-                    " - correctness: integer 1-5\n"
-                    " - justification_correctness: text\n"
-                    " - completeness: integer 1-5\n"
-                    " - justification_completeness: text\n"
-                    " - clarity: integer 1-5\n"
-                    " - justification_clarity: text\n"
-                    " - citation_following: integer 1-5\n"
-                    " - justification_citation_following: text\n\n"
-                    "Return ONLY the JSON object enclosed in the markers.\n\n"
-                    f"QUESTION:\n{item['question']}\n\nMODEL ANSWER:\n{response_data.get('raw_generation')}\n"
-                )
-
-                # if cache_id present, add the marker to the judge prompt so the judge knows to resolve via cache
-                if cache_id:
-                    judge_prompt_template = f"[DOCUMENT_CACHE_ID:{cache_id}]\n\n" + judge_prompt_template
-
-                result_entry = {
-                    'problem_id': item['problem_id'],
-                    'test_name': f"{ablation_name}::{variant_suffix}",
-                    'ablation_condition': ablation_condition,
-                    'model_name': model_name,
-                    'model_version': model_version,
-                    'api_type': api_type,
-                    'api_version': api_version,
-                    'sop_template_file': sop_template_file,
-                    'prompt_used': prompt_str,
-                    'generation_parameters': json.dumps(API_PARAMETERS),
-                    'raw_model_output': response_data.get('raw_generation'),
-                    'source_papers': ", ".join(item.get('source_papers', [])),
-                    'question': item['question'],
-                    'error': response_data.get('error'),
-                    'api_latency_ms': response_data.get('api_latency_ms'),
-                    'judge_prompt': "",
-                    'raw_judge_response': "",
-                    'score_faithfulness_rating': None,
-                    'score_faithfulness_justification': "",
-                    'score_correctness_rating': None,
-                    'score_correctness_justification': "",
-                    'score_completeness_rating': None,
-                    'score_completeness_justification': "",
-                    'score_clarity_rating': None,
-                    'score_clarity_justification': "",
-                    'score_citation_following_rating': None,
-                    'score_citation_following_justification': ""
-                }
-
-                # use lower-overhead CSV append helper
-                write_result_row_to_csv(log_filename, result_entry, results_columns)
-
-                # capture small pieces needed for background judge BEFORE deleting large locals
-                raw_generation_for_judge = response_data.get('raw_generation') if response_data else None
-                judge_prompt_for_task = judge_prompt_template
-
-                # free large locals asap to reduce peak memory
-                try: del prompt_str
-                except Exception: pass
-                try: del source_text
-                except Exception: pass
-                try: del response_data
-                except Exception: pass
-                try: del judge_prompt_template
-                except Exception: pass
-
-                # periodic garbage collection to release memory from temporary objects
-                if (int(item['problem_id'].split('-')[-1]) % 50) == 0:
-                    gc.collect()
-
-                # Only submit background judge task when auto_judge is enabled.
-                if auto_judge:
-                    submit_time = time.time()
-                    fut = judge_executor.submit(
-                        _run_judge_and_update,
-                        item['problem_id'],
-                        result_entry['test_name'],
-                        item['question'],
-                        raw_generation_for_judge,
-                        judge_prompt_for_task
-                    )
-                    with future_lock:
-                        future_to_meta[fut] = (item['problem_id'], result_entry['test_name'], submit_time)
-                    fut.add_done_callback(_on_judge_done)
-                    # update judge progress bar total to reflect a new outstanding task (no stdout)
+                if sop_template_file:
                     try:
-                        judge_pbar.total += 1
-                        judge_pbar.refresh()
-                    except Exception:
-                        pass
+                        if sop_template_file.lower().endswith(".json"):
+                            sop_template_obj = load_sop_template(sop_template_file)
+                            sop_content = json.dumps(sop_template_obj, indent=2, ensure_ascii=False)
 
-                    # If too many outstanding judges, wait for some to finish before continuing
-                    if len(future_to_meta) >= JUDGE_QUEUE_CAP:
-                        print(f"[JUDGE] Reached queue cap ({JUDGE_QUEUE_CAP}). Waiting for at least one judge to finish...")
-                        # wait for first completed future (non-blocking uses small timeout)
-                        done, _ = concurrent.futures.wait(list(future_to_meta.keys()), timeout=5, return_when=concurrent.futures.FIRST_COMPLETED)
-                        # give GC a chance after clearing references
-                        gc.collect()
+                            # Define SOP variants
+                            template_variants = [
+                                ("json_original", sop_content),
+                                ("json_with_grounding_prefix", f"Treat the following JSON as a grounding object:\n{sop_content}")
+                            ]
+                        else:
+                            with open(sop_template_file, "r", encoding="utf-8") as f:
+                                sop_content = f.read()
+                            template_variants = [("txt_original", sop_content)]
+                    except FileNotFoundError:
+                        print(f"--- WARNING --- \nSOP template file not found for '{ablation_name}': '{sop_template_file}'. Skipping this ablation.")
+                        continue
+                    except Exception as e:
+                        print(f"--- WARNING --- \nError loading SOP template for '{ablation_name}': {e}. Skipping.")
+                        continue
                 else:
-                    # auto_judge disabled: leave judge fields empty / record status for later processing
-                    pass
+                    # No template provided (e.g., control). Use a single empty/text-only variant.
+                    template_variants = [("no_sop", "")]
+
+                for variant_suffix, variant_sop_content in template_variants:  # Loop over SOP variants
+                    # Generate a unique problem_id for each iteration
+                    problem_id = f"{item['problem_id']}-iter{iteration + 1}"
+
+                    # Build the prompt and process as usual
+                    prompt_str = (
+                        f"{variant_sop_content}\n\n---\n"
+                        f"**USER'S QUESTION:**\n{item['question']}\n\n---\n\n"
+                        "Based on the instructions in the JSON object, synthesize an answer to the user's question."
+                    )
+
+                    # Call the model and process the response
+                    if ablation_config["api_type"] == "ollama":
+                        response_data = generate_ollama_response(ablation_config["model_name"], prompt_str)
+                    else:
+                        response_data = generate_google_response(ablation_config["model_name"], prompt_str)
+
+                    # Extract raw generation for judge
+                    raw_generation_for_judge = response_data.get('raw_generation', "")
+
+                    # Write the result to the CSV
+                    result_entry = {
+                        'problem_id': problem_id,
+                        'test_name': f"{ablation_name}::{variant_suffix}",
+                        'ablation_condition': ablation_config.get("description", ""),
+                        'model_name': ablation_config["model_name"],
+                        'model_version': "",
+                        'api_type': ablation_config["api_type"],
+                        'api_version': "",
+                        'sop_template_file': sop_template_file,
+                        'prompt_used': prompt_str,
+                        'generation_parameters': json.dumps(API_PARAMETERS),
+                        'raw_model_output': raw_generation_for_judge,
+                        'source_papers': ", ".join(item.get('source_papers', [])),
+                        'question': item['question'],
+                        'error': response_data.get('error'),
+                        'api_latency_ms': response_data.get('api_latency_ms'),
+                        'judge_prompt': f"[DOCUMENT_CACHE_ID:{judge_prompt_cache_id}]\n\n" if judge_prompt_cache_id else "",
+                        'raw_judge_response': "",
+                        'score_faithfulness_rating': None,
+                        'score_faithfulness_justification': "",
+                        'score_correctness_rating': None,
+                        'score_correctness_justification': "",
+                        'score_completeness_rating': None,
+                        'score_completeness_justification': "",
+                        'score_clarity_rating': None,
+                        'score_clarity_justification': "",
+                        'score_citation_following_rating': None,
+                        'score_citation_following_justification': ""
+                    }
+
+                    write_result_row_to_csv(log_filename, result_entry, results_columns)
+
+                    # Assign the judge prompt to the task
+                    judge_prompt_for_task = judge_prompt_template
+
+                    # Submit the task to the thread pool
+                    if auto_judge:
+                        submit_time = time.time()
+                        fut = judge_executor.submit(
+                            _run_judge_and_update,
+                            problem_id,
+                            result_entry['test_name'],
+                            item['question'],
+                            raw_generation_for_judge,
+                            judge_prompt_for_task  # Pass explicitly
+                        )
+                        with future_lock:
+                            future_to_meta[fut] = (problem_id, result_entry['test_name'], submit_time)
+                        fut.add_done_callback(_on_judge_done)
+
+                        # Update judge progress bar total to reflect a new outstanding task (no stdout)
+                        try:
+                            judge_pbar.total += 1
+                            judge_pbar.refresh()
+                        except Exception:
+                            pass
+
+                        # If too many outstanding judges, wait for some to finish before continuing
+                        if len(future_to_meta) >= JUDGE_QUEUE_CAP:
+                            print(f"[JUDGE] Reached queue cap ({JUDGE_QUEUE_CAP}). Waiting for at least one judge to finish...")
+                            # Wait for first completed future (non-blocking uses small timeout)
+                            done, _ = concurrent.futures.wait(list(future_to_meta.keys()), timeout=5, return_when=concurrent.futures.FIRST_COMPLETED)
+                            # Give GC a chance after clearing references
+                            gc.collect()
+
+                    # Update the generator progress bar
+                    generator_pbar.update(1)
+
+    # Close the progress bars at the end of the program
+    generator_pbar.close()
+    if auto_judge:
+        judge_pbar.close()
 
     # at program end, ensure executor shutdown and close HTTP session
     try:
