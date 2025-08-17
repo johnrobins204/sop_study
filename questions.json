@@ -1,0 +1,140 @@
+[
+    {
+        "source_papers": [
+            "Attention Is All You Need",
+            "Language Models are Few-Shot Learners GPT-3"
+        ],
+        "questions": [
+            "How does the self-attention mechanism, as described in 'Attention Is All You Need', provide the architectural foundation for the in-context 'few-shot learning' capability demonstrated in the GPT-3 paper?",
+            "Considering the constant path length of the Transformer from 'Attention Is All You Need', explain why larger models like GPT-3 are disproportionately better at few-shot tasks compared to zero-shot tasks.",
+            "Analyze the trade-offs between the computational complexity of self-attention (O(n^2*d)) from the Transformer paper and the massive parameter count of GPT-3. How does this trade-off impact the practical application of in-context learning at scale?",
+            "Explain how the concept of positional encodings in 'Attention Is All You Need' is critical for GPT-3 to understand the sequence and structure of examples provided in a few-shot prompt.",
+            "Discuss the implications of the Transformer's parallelizable architecture for training models of GPT-3's scale, specifically in contrast to the recurrent models it replaced.",
+            "How might the multi-head attention mechanism allow a model like GPT-3 to simultaneously process different aspects of the provided examples in a few-shot prompt (e.g., syntax, semantics, task format)?",
+            "Relate the findings on training-test contamination in the GPT-3 paper to the generalization capabilities of the Transformer architecture. Does the architecture itself make models more or less susceptible to memorizing training data?",
+            "Hypothesize how the decoder-only architecture of GPT-3, which builds upon the Transformer decoder, is both enabled by and a limitation for the types of few-shot tasks it excels at.",
+            "Connect the scaling factor (1/sqrt(d_k)) for stable gradients in the Transformer to the successful training of the 175-billion parameter GPT-3 model. Why is this small detail critical for large-scale training?",
+            "Analyze GPT-3's reported weaknesses on tasks like natural language inference (ANLI) through the lens of the core self-attention mechanism. What aspects of the Transformer might not be fully sufficient for these nuanced reasoning tasks?",
+            "Discuss how the fixed context window of Transformer-based models like GPT-3 represents a fundamental constraint on the complexity and number of examples that can be used in few-shot learning.",
+            "Explain the relationship between the embedding layers described in 'Attention Is All You Need' and GPT-3's ability to process and understand the diverse, web-scale text data it was trained on.",
+            "How does the concept of autoregression, fundamental to the Transformer's decoder, define the generative process of GPT-3 in a few-shot learning context?",
+            "Critique the idea of 'in-context learning' from the GPT-3 paper as a direct emergent property of the scaled-up Transformer architecture described in 'Attention Is All You Need'.",
+            "Relate the data filtering strategies used for GPT-3's training dataset to the types of dependencies the self-attention mechanism is likely to learn effectively."
+        ]
+    },
+    {
+        "source_papers": [
+            "Chain-of-Thought prompting elicits reasoning in large language models",
+            "A survey of large language models"
+        ],
+        "questions": [
+            "Explain how Chain-of-Thought prompting can be seen as a method to elicit the 'emergent abilities' that are described as a characteristic of large-scale models in the survey paper.",
+            "Using the concept of a 'data curriculum' from the survey, hypothesize how pre-training data composition might influence the effectiveness of Chain-of-Thought prompting for mathematical reasoning tasks.",
+            "Contrast the 'local' token-level optimization of Supervised Fine-Tuning (SFT) with the 'global' text-level optimization of RLHF, as described in the survey. How does Chain-of-Thought prompting fit into this spectrum?",
+            "Analyze the failure of 'reasoning after answer' prompts from the CoT paper through the lens of the four generations of language models described in the survey. Which 'generation' of capability is CoT truly activating?",
+            "Discuss the robustness of Chain-of-Thought prompting (varying annotators, random exemplars) in the context of the survey's discussion on the challenges of prompt engineering and sensitivity.",
+            "Relate the concept of 'long CoT reasoning' from the survey to the basic mechanism of CoT. How does the trial-and-error approach extend the initial concept?",
+            "Explain the shift in 'scientific thinking' from early models to general-purpose task solvers (from the survey) and how CoT prompting is a prime example of this new paradigm.",
+            "How does the survey's discussion on mitigating hallucination via RLHF relate to the error analysis in the CoT paper, where scale reduced reasoning errors?",
+            "Can the effectiveness of CoT on symbolic reasoning tasks (like Last Letter Concatenation) be explained by the pre-training data mixtures discussed in the survey?",
+            "Critique Chain-of-Thought as a technique for improving model reasoning versus simply being a method for making the model's existing, latent reasoning visible, using concepts from both papers.",
+            "How does the concept of a 'verifiable reward model' for long CoT (from the survey) address the limitations of standard CoT on tasks without easily checkable answers?",
+            "Analyze the emergence of CoT as an ability of scale in the context of the survey's discussion on predictable 'scaling laws'. Are these two concepts in opposition or are they complementary?",
+            "Discuss the potential for a 'data curriculum' (from the survey) to be specifically designed to enhance emergent abilities like Chain-of-Thought reasoning.",
+            "How does the survey's description of different alignment techniques (SFT, RLHF) relate to the challenge of controlling and steering the reasoning paths generated by CoT prompts?",
+            "Relate the failure of 'Equation only' prompting on complex GSM8K problems (from the CoT paper) to the survey's discussion on the importance of natural language data in pre-training for developing reasoning capabilities."
+        ]
+    },
+    {
+        "source_papers": [
+            "Attention Is All You Need",
+            "Chain-of-Thought prompting elicits reasoning in large language models"
+        ],
+        "questions": [
+            "Analyze how the parallel processing capability of the multi-head attention mechanism in the Transformer could enable the complex, multi-step reasoning required for effective Chain-of-Thought prompting.",
+            "Explain the role of the position-wise feed-forward networks in the Transformer architecture in the context of performing the individual computational steps within a Chain-of-Thought.",
+            "How does the Transformer's ability to handle long-range dependencies directly support a model's ability to maintain a coherent line of reasoning throughout a long Chain-of-Thought?",
+            "Discuss the limitations that the Transformer's fixed context window imposes on the length and complexity of reasoning chains that can be elicited via CoT prompting.",
+            "Relate the concept of 'emergence' of CoT at scale to the architectural properties of the Transformer. What is it about scaling this specific architecture that unlocks this reasoning capability?",
+            "Could the different heads in a multi-head attention layer be learning to perform different types of logical operations (e.g., arithmetic, causal inference) that are then composed into a full Chain-of-Thought?",
+            "Analyze the failure of 'variable compute only' prompts in the CoT paper from an architectural perspective. Why is simply giving the Transformer more 'thinking time' insufficient without the structured reasoning steps?",
+            "Explain how the causal masking in the Transformer's decoder is essential for generating a step-by-step, autoregressive Chain-of-Thought.",
+            "Hypothesize how the Transformer's encoder-decoder attention mechanism could be leveraged in a more complex agent to verify or critique its own generated Chain-of-Thought.",
+            "Discuss the relationship between the dimensionality of the model ($d_{model}$) in the Transformer and the complexity of the reasoning problems that can be solved with CoT.",
+            "How might the learned positional embeddings (as an alternative to sinusoidal ones) in a Transformer affect its ability to perform length generalization on symbolic reasoning tasks like those in the CoT paper?",
+            "Analyze the error types rectified by scaling CoT models (e.g., calculation errors, semantic understanding) and link them to specific components of the Transformer architecture that are being improved.",
+            "Could the residual connections and layer normalization in the Transformer be critical for maintaining stable representations throughout a very deep and complex Chain-of-Thought?",
+            "Explain why a simple dot-product attention, without the sophistication of multi-head projections, might fail to produce the nuanced, multi-faceted reasoning seen in CoT.",
+            "Critique the Transformer architecture's suitability for tasks requiring strict logical consistency, even with CoT, and discuss potential architectural modifications that might improve it."
+        ]
+    },
+    {
+        "source_papers": [
+            "Language Models are Few-Shot Learners GPT-3",
+            "A survey of large language models"
+        ],
+        "questions": [
+            "How does the concept of 'in-context learning' from the GPT-3 paper exemplify the 'third generation' of LLMs (general-purpose task solvers) described in the survey?",
+            "Analyze the training data composition of GPT-3 in the context of the survey's discussion on data quality, diversity, and the potential for a 'data curriculum'.",
+            "Discuss GPT-3's performance variability across different tasks (e.g., strong on QA, weak on ANLI) using the survey's framework of emergent abilities and the limitations of pre-training.",
+            "How do the scaling laws observed in the development of GPT-3 provide empirical evidence for the predictable scaling trends discussed in the survey paper?",
+            "Relate the survey's discussion of alignment techniques (SFT, RLHF) to the challenges of controlling the output of a massive model like GPT-3, especially concerning the broader impacts and misuse potential.",
+            "Explain how the architectural modifications from GPT-2 to GPT-3 align with the general principles of scaling and optimization for large models as outlined in the survey.",
+            "Does the phenomenon of few-shot learning in GPT-3 count as a true 'emergent ability' according to the definition provided in the survey, or is it a predictable outcome of scaling?",
+            "Analyze the methodology for mitigating training-test contamination in the GPT-3 paper from the perspective of ensuring robust evaluation, a key challenge highlighted in the survey.",
+            "How could the concept of 'long CoT reasoning' from the survey be applied to overcome some of the reported weaknesses of GPT-3 on complex reasoning tasks?",
+            "Discuss the trade-offs between model scale (like GPT-3) and the efficiency of techniques like parameter-efficient fine-tuning (PEFT), as described in the survey.",
+            "How does the survey's view on the future of LLMs (e.g., multimodality, tool use) build upon the capabilities and limitations first demonstrated at scale by GPT-3?",
+            "Critique the data filtering strategies of GPT-3 using the ethical considerations and bias mitigation techniques discussed in the survey.",
+            "Relate the concept of 'model editing' from the survey to the challenge of correcting factual inaccuracies in a pre-trained model like GPT-3 without costly retraining.",
+            "How does the survey's framework of four generations of LLMs help to contextualize the significance and impact of the GPT-3 paper in the history of AI research?",
+            "Can the strong performance of GPT-3 on code generation be explained by the data mixture principles discussed in the survey's section on pre-training data?"
+        ]
+    },
+    {
+        "source_papers": [
+            "Language Models are Few-Shot Learners GPT-3",
+            "Chain-of-Thought prompting elicits reasoning in large language models"
+        ],
+        "questions": [
+            "Is the 'in-context learning' of GPT-3 a prerequisite for the effectiveness of Chain-of-Thought prompting, or are they two independent phenomena of scale?",
+            "Analyze the difference in prompt structure between a few-shot prompt for a task like translation (in the GPT-3 paper) and a Chain-of-Thought prompt for a math problem. What does this reveal about the capabilities being activated?",
+            "Could Chain-of-Thought prompting be used to overcome some of the reported weaknesses of GPT-3 on tasks requiring more explicit reasoning, such as ANLI?",
+            "Discuss the finding that CoT is an 'emergent ability' in the context of the scaling laws presented in the GPT-3 paper. At what parameter scale would you expect CoT to become effective, based on the trends in the GPT-3 results?",
+            "Compare and contrast the 'exemplars' used in a CoT prompt with the 'shots' in a few-shot prompt. What is their functional difference in guiding the model's output?",
+            "How does the robustness of CoT to different annotators and exemplars relate to GPT-3's ability to generalize from just a few examples in its prompt?",
+            "Analyze the failure of simple prompting on GSM8K in the CoT paper, even for a large model. What does this imply about the limitations of the standard few-shot paradigm described in the GPT-3 paper?",
+            "Could the architectural modifications made for GPT-3 (e.g., sparse attention patterns) have an impact on its ability to effectively process and utilize long Chains-of-Thought?",
+            "Hypothesize how you could combine few-shot learning and Chain-of-Thought into a single prompt to solve a complex, multi-step task that also requires learning a new format from examples.",
+            "Discuss the computational cost (in terms of tokens and inference time) of a complex Chain-of-Thought prompt compared to a multi-shot prompt for GPT-3. What are the trade-offs?",
+            "Relate the error analysis from the CoT paper (e.g., calculation errors) to the broader impacts and reliability concerns raised in the GPT-3 paper.",
+            "Why might CoT prompting show strong length generalization on symbolic tasks, while standard few-shot learning in GPT-3 can sometimes struggle with out-of-domain generalization?",
+            "Could the data filtering and curation done for GPT-3's training set have inadvertently created a model that was more amenable to the emergence of Chain-of-Thought reasoning?",
+            "Analyze the prompt 'Reasoning after answer' from the CoT paper. How does its failure demonstrate a key difference between genuine reasoning and post-hoc justification, in the context of a generative model like GPT-3?",
+            "Critique the idea that CoT is a fundamentally different capability than few-shot learning. Argue for the position that CoT is simply a more sophisticated form of in-context learning."
+        ]
+    },
+    {
+        "source_papers": [
+            "Attention Is All You Need",
+            "A survey of large language models"
+        ],
+        "questions": [
+            "How does the Transformer architecture, introduced in 'Attention Is All You Need', represent the key enabling technology for the 'third and fourth generations' of LLMs described in the survey?",
+            "Analyze the survey's discussion on scaling laws in the context of the Transformer's computational complexity (O(n^2*d)). What are the architectural bottlenecks to continued scaling?",
+            "Relate the concept of 'positional encodings' from the Transformer paper to the challenge of handling long-context inputs, a key area of ongoing research mentioned in the survey.",
+            "Discuss how the survey's concepts of SFT and RLHF are applied to align models that are fundamentally based on the Transformer architecture.",
+            "How does the multi-head attention mechanism from the Transformer paper support the development of the multi-modal capabilities discussed as a key feature of modern LLMs in the survey?",
+            "Explain the shift from encoder-decoder models (like the original Transformer) to decoder-only models, and how this architectural evolution is framed within the survey's history of LLMs.",
+            "Could the 'interpretability' benefit of self-attention mentioned in the Transformer paper be a tool to better understand the 'emergent abilities' discussed in the survey?",
+            "Analyze the survey's discussion on efficient training techniques (e.g., mixture of experts) as a direct response to the computational scaling challenges inherent in the original Transformer architecture.",
+            "How does the Transformer's ability to capture long-range dependencies relate to the survey's discussion of LLMs' success on tasks requiring world knowledge and common-sense reasoning?",
+            "Critique the original Transformer's suitability for 'agentic' behaviors (e.g., tool use), a key feature of fourth-generation LLMs according to the survey.",
+            "Relate the dropout and label smoothing regularization techniques from the Transformer paper to the broader challenge of preventing overfitting in massive models, as discussed in the survey.",
+            "How does the concept of a 'data curriculum' (from the survey) apply to the training of a foundational architecture like the Transformer for specific downstream capabilities?",
+            "Discuss the role of the position-wise feed-forward networks in the Transformer as a source of the massive parameter counts that enable the scaling laws described in the survey.",
+            "Analyze the maximum path length advantage of the Transformer (O(1)) in the context of the survey's discussion on the difficulty of learning long-term dependencies in sequential data.",
+            "Connect the success of the Transformer on machine translation to the survey's broader narrative of LLMs evolving from specialized task-solvers to general-purpose platforms."
+        ]
+    }
+]

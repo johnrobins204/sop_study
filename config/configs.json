@@ -1,0 +1,40 @@
+{
+  "experiment_name": "sop_ablation_three_way",
+  "auto_judge": false,
+  "judge_model_name": "gemini-1.5-pro-latest",
+  "api_parameters": {
+    "temperature": 0.0,
+    "max_tokens": 512
+  },
+
+
+  "obs": 10,                
+  "iters": 1,               
+  "randomize_obs": true,   
+  "obs_seed": 42,          
+
+  "models_to_test": {
+    "control_empty": {
+      "description": "No SOP injection (control)",
+      "model_name": "llama3:8b",
+      "api_type": "ollama",
+      "injection_type": "control",
+      "sop_template_file": ""
+    },
+    "control_prompt": {
+      "description": "Well-Crafted Prompt (control)",
+      "model_name": "llama3:8b",
+      "api_type": "ollama",
+      "injection_type": "control",
+      "sop_template_file": "config/control_sop.json"
+    },
+    "sop_only": {
+      "description": "SOP injected (no extra prose)",
+      "model_name": "llama3:8b",
+      "api_type": "ollama",
+      "injection_type": "sop",
+      "sop_template_file": "config/scholar_sop.json"
+    }
+  },
+  "judge_workers": 4
+}
