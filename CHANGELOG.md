@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.2.0 - August 17, 2025
+
+### Enhancements
+- **Simplified Concurrency Model**: Refactored the trial execution logic from a fully thread-pooled system to a more stable small-batch asynchronous process. This prioritizes data integrity for current experiment scales.
+
+### Bug Fixes
+- **Resolved Data Pollution in Results**: Fixed a critical bug where concurrent threads could cause data corruption in the output logs. The new batching model ensures each trial is processed in isolation, preventing cross-contamination of results.
+
 ## v1.1.0 - August 17, 2025
 
 ### Enhancements
