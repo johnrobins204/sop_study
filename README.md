@@ -1,6 +1,6 @@
-# AI Model Evaluation Pipeline
+# Prompt Evaluation Pipeline
 
-This project provides a flexible and robust pipeline for evaluating the performance of Large Language Models (LLMs) on a given set of questions. It supports both API-based models (e.g., Google's Gemini) and locally-hosted models (e.g., via Ollama).
+This project provides a flexible and robust pipeline for evaluating the performance of Large Language Models (LLMs) on a given set of questions using different prompt configurations. It supports both API-based models (e.g., Google's Gemini) and locally-hosted models (e.g., via Ollama).
 
 The pipeline is designed in two main phases:
 1.  **Generate**: Models generate answers to a series of questions based on provided source texts.
