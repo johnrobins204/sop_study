@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2025-08-18
+
+### Added
+- **Project README**: Added a comprehensive `README.md` with project overview, installation instructions, and detailed usage examples for all run modes.
+
+### Changed
+- **Improved Code Hygiene**: Updated `.gitignore` to properly exclude generated cache files and directories from the repository.
+- **Standardized Entry Point**: Renamed the primary execution script from `run_study_v2.py` to `main.py` to align with Python community conventions.
+
 ## [2.0.0] - 2025-08-18
 
 ### Added
