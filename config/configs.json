@@ -2,8 +2,8 @@
   "experiment_name": "sop_stable_validation_study",
   "run_settings": {
     "mode": "judge_only",
-    "judge_input_file": "results/full_log_sop_stable_validation_study_20250817_192522.csv",
-    "judge_mode": "full"
+    "judge_input_file": "results/full_log_sop_stable_validation_study_20250817_192522_rejudged_20250818_194219.csv",
+    "judge_mode": "patch"
   },
   "verbose_mode": true,
   "auto_judge": true,
