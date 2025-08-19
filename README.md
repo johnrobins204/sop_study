@@ -1,10 +1,11 @@
-# Prompt Evaluation Pipeline
+# Gnosis - Prompt Research Bench
 
 This project provides a flexible and robust pipeline for evaluating the performance of Large Language Models (LLMs) on a given set of questions using different prompt configurations. It supports both API-based models (e.g., Google's Gemini) and locally-hosted models (e.g., via Ollama).
 
 The pipeline is designed in two main phases:
 1.  **Generate**: Models generate answers to a series of questions based on provided source texts.
 2.  **Judge**: An automated LLM judge evaluates the generated answers against a configurable set of criteria.
+3.  A third **Analyze** phase is coming with a full refactor and a more coherent solution design. (Planned Aug '25)
 
 ## Features
 
