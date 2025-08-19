@@ -9,19 +9,19 @@ import threading
 import concurrent.futures
 import logging
 import platform
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+import argparse
 
 import requests
 import pandas as pd
 import google.generativeai as genai
-import google.api_core.exceptions
-
 from dotenv import load_dotenv
 from datetime import datetime
 from tqdm import tqdm
 from pathlib import Path
-from queue import Queue
+
+# --- Local Imports from new modules ---
+from src.data_structures import Trial, ModelResponse, JudgeEvaluation
+from src.models import LanguageModel, get_model_instance, CONTEXT_CACHE
 
 # --- Load environment variables ---
 load_dotenv()
@@ -31,212 +31,144 @@ CONFIG = {}
 HTTP_SESSION = requests.Session()
 GLOBAL_FILE_LOCK = threading.Lock()
 
-# --- START: New Object-Oriented Structure ---
-
-@dataclass
-class ModelResponse:
-    """A structured container for a model's response."""
-    raw_text: str = ""
-    error: str | None = None
-    api_latency_ms: int = 0
-    finish_reason: str | None = None
-    safety_ratings: dict = field(default_factory=dict)
-
-@dataclass
-class JudgeEvaluation:
-    """A structured container for a judge's evaluation."""
-    raw_judge_response: str = ""
-    judge_error: str | None = None
-    scores: dict = field(default_factory=dict)
-
-@dataclass
-class Trial:
-    """Represents a single experimental trial."""
-    problem_id: str
-    test_name: str
-    question: str
-    source_text: str
-    ablation_condition: str
-    model_response: ModelResponse | None = None
-    judge_evaluation: JudgeEvaluation | None = None
-
-    def to_csv_row(self, columns):
-        """Flattens the Trial object into a dictionary for CSV writing."""
-        row = {
-            'problem_id': self.problem_id,
-            'test_name': self.test_name,
-            'question': self.question,
-            'source_text': self.source_text,
-            'ablation_condition': self.ablation_condition,
-        }
-        if self.model_response:
-            row['raw_model_output'] = self.model_response.raw_text
-            row['error'] = self.model_response.error
-            row['api_latency_ms'] = self.model_response.api_latency_ms
-        
-        if self.judge_evaluation:
-            row['raw_judge_response'] = self.judge_evaluation.raw_judge_response
-            row['judge_error'] = self.judge_evaluation.judge_error
-            # Flatten scores
-            for k, v in self.judge_evaluation.scores.items():
-                row[f"score_{k}_rating"] = v.get('rating')
-                row[f"score_{k}_justification"] = v.get('justification')
-
-        # Ensure all columns are present
-        return {c: row.get(c, "") for c in columns}
-
-class LanguageModel(ABC):
-    """Abstract base class for language models."""
-    def __init__(self, model_name: str, api_parameters: dict):
-        self.model_name = model_name
-        self.api_parameters = api_parameters
-
-    @abstractmethod
-    def generate(self, prompt: str, timeout: int) -> ModelResponse:
-        """Generates a response from the model."""
-        pass
-
-class GoogleModel(LanguageModel):
-    """LanguageModel implementation for the Google Gemini API."""
-    def generate(self, prompt: str, timeout: int = 90) -> ModelResponse:
-        start_time = time.time()
-        try:
-            model = genai.GenerativeModel(self.model_name)
-            generation_config = genai.types.GenerationConfig(
-                temperature=self.api_parameters.get("temperature"),
-                max_output_tokens=self.api_parameters.get("max_tokens")
-            )
-            response = model.generate_content(
-                prompt,
-                generation_config=generation_config,
-                request_options={"timeout": timeout}
-            )
-            latency = (time.time() - start_time) * 1000
-
-            # Use the robust response.text property
-            raw_text = response.text
-            
-            candidate = response.candidates[0]
-            finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
-            safety_ratings = {r.category.name: r.probability.name for r in candidate.safety_ratings}
-
-            return ModelResponse(
-                raw_text=raw_text,
-                api_latency_ms=int(latency),
-                finish_reason=finish_reason,
-                safety_ratings=safety_ratings
-            )
-        except ValueError as e:
-            # This catches cases where response.text fails (e.g., blocked response)
-            finish_reason = "BLOCKED"
-            safety_ratings = {}
-            if response and response.candidates:
-                candidate = response.candidates[0]
-                finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else 'BLOCKED'
-                safety_ratings = {r.category.name: r.probability.name for r in candidate.safety_ratings}
-            
-            error_message = f"Response blocked or empty. Finish Reason: {finish_reason}. Safety: {safety_ratings}"
-            logging.warning(error_message)
-            return ModelResponse(error=error_message, api_latency_ms=int((time.time() - start_time) * 1000))
-        except Exception as e:
-            logging.error(f"Error in GoogleModel for {self.model_name}: {e}")
-            return ModelResponse(error=str(e), api_latency_ms=int((time.time() - start_time) * 1000))
-
-class OllamaModel(LanguageModel):
-    """LanguageModel implementation for a local Ollama model."""
-    def generate(self, prompt: str, timeout: int = 120) -> ModelResponse:
-        start_time = time.time()
-        url = f"{CONFIG.get('ollama_base_url', 'http://localhost:11434')}/api/generate"
-        payload = {
-            "model": self.model_name,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": self.api_parameters.get("temperature"),
-                "num_predict": self.api_parameters.get("max_tokens")
-            }
-        }
-        try:
-            response = HTTP_SESSION.post(url, json=payload, timeout=timeout)
-            response.raise_for_status()
-            response_json = response.json()
-            return ModelResponse(
-                raw_text=response_json.get("response", ""),
-                api_latency_ms=int((time.time() - start_time) * 1000)
-            )
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Ollama API request failed for {self.model_name}: {e}")
-            return ModelResponse(error=str(e), api_latency_ms=int((time.time() - start_time) * 1000))
-
 class Judge:
     """Encapsulates all logic for LLM-based evaluation."""
-    def __init__(self, model: LanguageModel, judge_prompt_template: dict):
+    def __init__(self, model: LanguageModel, judge_criteria_config: dict):
         self.model = model
-        self.prompt_template = judge_prompt_template
+        # Stores the file paths for each criterion's JSON template
+        self.criteria_templates = judge_criteria_config
+        # This cache is now only used if the judge is NOT a local Ollama model
+        self.source_text_cache = {}
+
+    def _cache_source_text(self, source_text: str) -> str:
+        """Hashes and caches the source text, returning a key."""
+        if not source_text:
+            return ""
+        
+        key = f"sha256:{hashlib.sha256(source_text.encode('utf-8')).hexdigest()}"
+
+        # For local models, use the global context cache to avoid resending large texts
+        if "OllamaModel" in str(type(self.model)):
+            # Use standard dictionary assignment for the global cache
+            CONTEXT_CACHE[key] = source_text
+        else:
+            # For remote models (like Google), use the instance-level cache
+            self.source_text_cache[key] = source_text
+        
+        return key
+
+    def _evaluate_criterion(self, criterion_name: str, question: str, answer: str, source_text_or_key: str) -> tuple[str, dict]:
+        """Evaluates a single criterion for a given trial."""
+        prompt = self._build_prompt_for_criterion(criterion_name, question, answer, source_text_or_key)
+        response = self.model.generate(prompt, timeout=90)
+
+        if response.error or not response.raw_text.strip():
+            return criterion_name, {"error": response.error or "Empty response", "raw_response": ""}
+
+        parsed = self._parse_criterion_response(response.raw_text)
+        # Always include the raw response for debugging
+        parsed["raw_response"] = response.raw_text
+        return criterion_name, parsed
 
     def evaluate(self, trial: Trial) -> JudgeEvaluation:
-        if not trial.model_response or trial.model_response.error or not trial.model_response.raw_text.strip():
+        """
+        Evaluates a model's response against all configured criteria.
+        This can be run in parallel for multiple trials.
+        """
+        # Robust Guard Clause: Explicitly check if the raw_text is a non-empty string.
+        # This handles None, NaN, and empty/whitespace-only strings correctly.
+        if not isinstance(trial.model_response.raw_text, str) or not trial.model_response.raw_text.strip():
             return JudgeEvaluation(judge_error="Skipped: Model generation was empty or had an error.")
 
-        prompt = self._build_prompt(
-            trial.question,
-            trial.model_response.raw_text,
-            trial.source_text
-        )
+        # --- Setup for Parallel Judging ---
+        all_results = {}
+        all_errors = []
         
-        response = self.model.generate(prompt, timeout=180)
-        
-        if response.error or not response.raw_text.strip():
-            return JudgeEvaluation(
-                raw_judge_response=response.raw_text,
-                judge_error=response.error or "Empty raw response from judge model."
-            )
+        # Cache the source text once before starting parallel evaluations
+        source_key = self._cache_source_text(trial.source_text)
 
-        parsed_scores = self._parse_response(response.raw_text)
-        
+        judge_workers = int(CONFIG.get("judge_workers", 4))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=judge_workers, thread_name_prefix="JudgeCriterion") as executor:
+            future_to_criterion = {
+                executor.submit(self._evaluate_criterion, name, trial.question, trial.model_response.raw_text, source_key): name
+                for name in self.criteria_templates.keys()
+            }
+            for future in concurrent.futures.as_completed(future_to_criterion):
+                criterion_name = future_to_criterion[future]
+                try:
+                    name, result = future.result()
+                    all_results[name] = {
+                        "rating": result.get("rating"),
+                        "justification": result.get("justification", "")
+                    }
+                    # Store the raw judge response for this criterion
+                    if result.get("raw_response"):
+                        all_results[name]["raw_response"] = result["raw_response"]
+                    if result.get("error"):
+                        all_errors.append(f"{name}: {result['error']}")
+                except Exception as e:
+                    all_errors.append(f"Future for {criterion_name} failed: {e}")
+
         return JudgeEvaluation(
-            raw_judge_response=response.raw_text,
-            judge_error=parsed_scores.get("error"),
-            scores=parsed_scores.get("scores", {})
+            raw_judge_response=json.dumps(all_results, indent=2), # Save all raw responses
+            judge_error=" | ".join(all_errors) if all_errors else None,
+            scores=all_results
         )
 
-    def _build_prompt(self, question: str, answer: str, source_text: str) -> str:
-        sop_str = json.dumps(self.prompt_template, indent=2)
-        source_block = f"**SOURCE TEXTS FOR EVALUATION:**\n{source_text}\n\n---\n\n" if source_text.strip() else ""
+    def _build_prompt_for_criterion(self, criterion_name: str, question: str, answer: str, source_text_key: str) -> str:
+        """Builds a focused prompt by injecting the full JSON for a single evaluation criterion."""
+        source_text = ""
+        # Look up the source text from the appropriate cache
+        if source_text_key:
+            if "OllamaModel" in str(type(self.model)):
+                source_text = CONTEXT_CACHE.get(source_text_key, "[Source Text Not Found in Global Cache]")
+            else:
+                source_text = self.source_text_cache.get(source_text_key, "[Source Text Not Found in Instance Cache]")
+
+        # Load the specific JSON template for the criterion
+        template_path = self.criteria_templates[criterion_name]
+        judge_template_obj = load_json_file(template_path)
+        judge_instruction_json = json.dumps(judge_template_obj, indent=2)
+        
+        # Extract the output format template from the JSON
+        output_instructions = judge_template_obj.get("outputFormat", {}).get("template", "Critique: [Critique]\nScore: [Score]")
+
         return (
-            f"Please act as an impartial evaluator. Your instructions are provided in the following JSON object:\n\n"
-            f"{sop_str}\n\n---\n\n"
-            f"{source_block}"
-            f"**QUESTION TO EVALUATE:**\n{question}\n\n"
+            f"**YOUR INSTRUCTIONS ARE PROVIDED IN THIS JSON OBJECT:**\n"
+            f"```json\n{judge_instruction_json}\n```\n\n"
+            f"**SOURCE TEXT(S) FOR EVALUATION:**\n{source_text}\n\n"
             f"**MODEL'S ANSWER TO EVALUATE:**\n{answer}\n\n---\n\n"
-            "Based on your instructions, provide your evaluation in the specified JSON format, enclosed between <<JUDGE_JSON>> and <</JUDGE_JSON>> markers."
+            f"**YOUR RESPONSE (use this exact format):**\n{output_instructions}"
         )
 
-    def _parse_response(self, text: str) -> dict:
+    def _parse_criterion_response(self, text: str) -> dict:
+        """Parses the 'Critique: ... Score: ...' format with fallbacks."""
         try:
-            match = re.search(r'<<JUDGE_JSON>>\s*(.*?)\s*<</JUDGE_JSON>>', text, re.DOTALL)
-            if not match:
-                return {"error": "Failed to find <<JUDGE_JSON>> markers."}
-            
-            parsed = json.loads(match.group(1))
-            scores = {}
-            score_keys = ["faithfulness", "correctness", "completeness", "clarity", "citation_following"]
-            
-            for key in score_keys:
-                # Flexible key matching
-                rating_val = parsed.get(key) or parsed.get(f"score_{key}") or parsed.get(f"score_{key}_rating")
-                just_val = parsed.get(f"justification_{key}") or parsed.get(f"{key}_justification") or parsed.get(f"score_{key}_justification")
-                
-                scores[key] = {
-                    "rating": int(rating_val) if rating_val is not None else None,
-                    "justification": str(just_val) if just_val is not None else ""
-                }
-            return {"scores": scores}
-        except (json.JSONDecodeError, TypeError, ValueError) as e:
-            return {"error": f"JSON parsing failed: {e}"}
+            # Make regex robust to optional markdown asterisks around keywords
+            critique_match = re.search(r"\*?\*?Critique:\*?\*?\s*(.*)", text, re.IGNORECASE | re.DOTALL)
+            score_match = re.search(r"\*?\*?Score:\*?\*?\s*(\d+)", text, re.IGNORECASE)
 
-# --- END: New Object-Oriented Structure ---
+            critique = critique_match.group(1).strip() if critique_match else "N/A"
+            score = int(score_match.group(1).strip()) if score_match else None
 
+            # Fallback: If 'Score: X' is not found, look for a number on the last non-empty line.
+            if score is None:
+                lines = [line.strip() for line in text.strip().split('\n')]
+                last_line = lines[-1] if lines else ""
+                # Check if the last line contains only a number
+                if last_line.isdigit():
+                    score = int(last_line)
+                    # If critique was not found, use the rest of the text as critique
+                    if critique == "N/A" and len(lines) > 1:
+                        critique = "\n".join(lines[:-1]).strip()
+
+
+            if score is None:
+                return {"error": "Could not parse score from response."}
+
+            return {"rating": score, "justification": critique}
+        except Exception as e:
+            return {"error": f"Parsing failed: {e}"}
 
 # --- Configuration and Setup (largely unchanged) ---
 def setup_google_api_client():
@@ -360,12 +292,135 @@ def run_judging_for_trials(judge: Judge, trials: list[Trial]):
             except Exception as e:
                 trial.judge_evaluation = JudgeEvaluation(judge_error=f"Judge future failed: {e}")
 
+def run_judge_only_mode(input_filepath: str, mode: str):
+    """Loads a CSV, runs judging on its contents, and saves to a new file."""
+    script_start_time = time.time()
+    print(f"--- Running in Judge-Only Mode ('{mode}') on file: {input_filepath} ---")
+    
+    # Config is already loaded by the main execution block
+    setup_google_api_client()
+
+    # 1. Setup Judge
+    if not CONFIG.get("auto_judge", False):
+        print("Auto-judging is disabled in the config. Exiting.")
+        return
+    
+    judge_criteria_config = CONFIG.get("judge_criteria")
+    if not judge_criteria_config:
+        print("❌ Error: 'judge_criteria' mapping not found in config. Cannot proceed with judging.")
+        return
+
+    api_params = CONFIG.get("api_parameters", {})
+    
+    # Use the factory to get the correct judge model instance
+    judge_model_identifier = CONFIG.get('judge_model_name')
+    if not judge_model_identifier:
+        print("❌ Error: 'judge_model_name' not found in config. Cannot create judge.")
+        return
+    # Add CONFIG as the second argument
+    judge_model = get_model_instance(judge_model_identifier, CONFIG, api_params)
+    judge = Judge(judge_model, judge_criteria_config)
+
+    # 2. Load existing results from CSV
+    try:
+        df = pd.read_csv(input_filepath)
+        # Fill NaNs in object columns to prevent errors
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].fillna('')
+        
+        # Explicitly handle source_text to ensure it's a string and NaNs are empty strings.
+        if 'source_text' in df.columns:
+            df['source_text'] = df['source_text'].fillna('').astype(str)
+
+    except FileNotFoundError:
+        sys.exit(f"--- FATAL ERROR --- \nInput file not found: {input_filepath}")
+
+    # 3. Prepare output file and get rows to judge
+    p = Path(input_filepath)
+    suffix = "patched" if mode == 'patch' else "rejudged"
+    output_filename = p.parent / f"{p.stem}_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    results_columns = list(df.columns)
+    
+    # Write header to the new file immediately
+    with open(output_filename, 'w', newline='', encoding='utf-8') as fh:
+        writer = csv.DictWriter(fh, fieldnames=results_columns)
+        writer.writeheader()
+    
+    print(f"✅ Output will be saved to '{output_filename}'")
+
+    # 4. Process and judge the selected rows
+    with tqdm(total=df.shape[0], desc=f"Judging ({mode})") as pbar:
+        for index, row in df.iterrows():
+            # Determine if this row needs judging based on the mode
+            needs_judging = False
+            if mode == 'full':
+                needs_judging = True
+            elif mode == 'patch':
+                is_response_empty = str(row.get('raw_judge_response', '')).strip() == ''
+                has_error = str(row.get('judge_error', '')).strip() != ''
+                if is_response_empty or has_error:
+                    needs_judging = True
+
+            trial = Trial(
+                problem_id=row.get('problem_id', ''),
+                test_name=row.get('test_name', ''),
+                question=row.get('question', ''),
+                source_text=row.get('source_text', ''),
+                ablation_condition=row.get('ablation_condition', ''),
+                model_response=ModelResponse(
+                    raw_text=row.get('raw_model_output', ''),
+                    error=row.get('error') if row.get('error') else None,
+                    api_latency_ms=int(row.get('api_latency_ms', 0))
+                )
+            )
+
+            if needs_judging:
+                # Run the evaluation and assign the result back to the trial object
+                trial.judge_evaluation = judge.evaluate(trial)
+            else:
+                # If not judging, reconstruct the old evaluation to preserve it
+                trial.judge_evaluation = JudgeEvaluation(
+                    raw_judge_response=row.get('raw_judge_response', ''),
+                    judge_error=row.get('judge_error', ''),
+                    scores={crit: {"rating": row.get(f'score_{crit}_rating'), "justification": row.get(f'score_{crit}_justification')} for crit in judge.criteria_templates}
+                )
+
+            # Atomically append the result for this single trial to the new CSV
+            write_trials_to_csv(output_filename, [trial], results_columns)
+            pbar.update(1)
+
+    print(f"\n✅ {mode.capitalize()} run complete. All results saved to '{output_filename}'")
+    print(f"--- Judge-Only Mode Complete ---")
+    print(f"Total time: {time.time() - script_start_time:.2f} seconds")
+
+
 def main():
     script_start_time = time.time()
+    # The argument parsing is now handled in the `if __name__ == "__main__"` block.
+    # This function will only be called if we are NOT in judge-only mode.
+    
     load_config()
     setup_google_api_client()
 
-    # Setup logging and results file
+    # --- Setup Models & Judge ---
+    models_to_test = {}
+    api_params = CONFIG.get("api_parameters", {})
+    for name, conf in CONFIG.get("models_to_test", {}).items():
+        # Add CONFIG as the second argument
+        models_to_test[name] = get_model_instance(conf['model_name'], CONFIG, api_params)
+
+    judge = None
+    if CONFIG.get("auto_judge", False):
+        judge_model_id = CONFIG.get('judge_model_name')
+        judge_criteria_cfg = CONFIG.get('judge_criteria')
+        if judge_model_id and judge_criteria_cfg:
+            # Add CONFIG as the second argument
+            judge_model = get_model_instance(judge_model_id, CONFIG, api_params)
+            judge = Judge(judge_model, judge_criteria_cfg)
+        else:
+            print("⚠️ Warning: Auto-judging enabled but 'judge_model_name' or 'judge_criteria' is missing in config.")
+
+    # --- Setup Logging ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = Path("results") / f"full_log_{CONFIG.get('experiment_name', 'exp')}_{timestamp}.csv"
     log_filename.parent.mkdir(parents=True, exist_ok=True)
@@ -378,8 +433,11 @@ def main():
         'score_faithfulness_rating', 'score_faithfulness_justification',
         'score_correctness_rating', 'score_correctness_justification',
         'score_completeness_rating', 'score_completeness_justification',
+        'score_synthesis_rating', 'score_synthesis_justification',
         'score_clarity_rating', 'score_clarity_justification',
-        'score_citation_following_rating', 'score_citation_following_justification'
+        'score_reasoning_quality_rating', 'score_reasoning_quality_justification',
+        'score_depth_of_insight_rating', 'score_depth_of_insight_justification',
+        'score_conciseness_rating', 'score_conciseness_justification'
     ]
     # Initialize CSV with header
     with open(log_filename, 'w', newline='', encoding='utf-8') as fh:
@@ -391,24 +449,9 @@ def main():
     if CONFIG.get("obs", 0) > 0:
         dataset = dataset[:CONFIG.get("obs")]
 
-    # Instantiate models and judge
-    api_params = CONFIG.get("api_parameters", {})
-    models_to_test = {
-        name: OllamaModel(config['model_name'], api_params)
-        for name, config in CONFIG.get("models_to_test", {}).items()
-    }
-    
-    judge = None
-    if CONFIG.get("auto_judge", False):
-        judge_prompt_template = load_json_file(CONFIG.get("judge_prompt_file", "config/judge_sop.json"))
-        judge_model = GoogleModel(CONFIG.get('judge_model_name'), api_params)
-        judge = Judge(model=judge_model, judge_prompt_template=judge_prompt_template)
-        print(f"Auto-judging enabled with model: {judge.model.model_name}")
-
     # Main processing loop
     for item in tqdm(dataset, desc="Processing Questions"):
         source_text = load_source_text_for_papers(item.get("source_papers", []))
-        completed_trials_for_question = []
 
         for iter_num in range(CONFIG.get("iters", 1)):
             for ablation_name, ablation_config in CONFIG.get("models_to_test", {}).items():
@@ -437,20 +480,43 @@ def main():
                 
                 # Run the generation
                 completed_trial = run_trial(model, trial_data)
-                completed_trials_for_question.append(completed_trial)
+                
+                # Judge this single trial immediately
+                if judge:
+                    try:
+                        completed_trial.judge_evaluation = judge.evaluate(completed_trial)
+                    except Exception as e:
+                        completed_trial.judge_evaluation = JudgeEvaluation(judge_error=f"Judge evaluation failed: {e}")
 
-        # Judge the batch of results for this question
-        if judge and completed_trials_for_question:
-            run_judging_for_trials(judge, completed_trials_for_question)
-
-        # Save results for this question to CSV
-        if completed_trials_for_question:
-            write_trials_to_csv(log_filename, completed_trials_for_question, results_columns)
-            if CONFIG.get("verbose_mode"):
-                print(f"  -> Saved {len(completed_trials_for_question)} results for question {item['problem_id']}")
+                # Save result for this single trial to CSV
+                write_trials_to_csv(log_filename, [completed_trial], results_columns)
+                if CONFIG.get("verbose_mode"):
+                    print(f"  -> Saved result for {trial_data['test_name']} on question {item['problem_id']}")
 
     print("\n--- Experiment Complete ---")
     print(f"Total time: {time.time() - script_start_time:.2f} seconds")
 
 if __name__ == "__main__":
-    main()
+    # Load config to determine run mode, replacing argparse
+    load_config()
+    
+    run_settings = CONFIG.get("run_settings", {})
+    mode = run_settings.get("mode", "generate")
+
+    if mode == "judge_only":
+        input_file = run_settings.get("judge_input_file")
+        judge_mode = run_settings.get("judge_mode", "full")
+
+        if not input_file:
+            sys.exit("--- FATAL ERROR --- \n'judge_input_file' not specified in config for judge_only mode.")
+        
+        if judge_mode not in ["full", "patch"]:
+            sys.exit(f"--- FATAL ERROR --- \nInvalid 'judge_mode': '{judge_mode}'. Must be 'full' or 'patch'.")
+
+        run_judge_only_mode(input_file, judge_mode)
+    
+    elif mode == "generate":
+        main()
+    
+    else:
+        sys.exit(f"--- FATAL ERROR --- \nUnknown run mode '{mode}' specified in config. Must be 'generate' or 'judge_only'.")
