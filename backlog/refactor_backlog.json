@@ -1,0 +1,175 @@
+{
+  "title": "Pipeline Refactor Backlog: inference / judge / analyst / orchestrator / io / models",
+  "version": "1.0",
+  "overview": "Refactor repo into composable pipeline with components: inference, judge, analyst; centralized I/O; models package; orchestrator that loads YAML run configs and dispatches component run_from_config(cfg). Components expose programmatic APIs and CLI run wrappers returning exit codes.",
+    "goals": [
+    "Clear component boundaries: inference, judge, analyst",
+    "Centralized I/O and shared types",
+    "Stable component contract: run_from_config(cfg) -> {success, artifacts}, run(argv) -> int",
+    "YAML-driven orchestrator for configurable runs",
+    "Provenance metadata and idempotent artifacts",
+    "Unit tests for core behavior"
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Add shared types and I/O modules",
+      "description": "Create src/types.py and src/io.py. Provide ModelResponse dataclass and helpers load_csv, write_dataframe, write_provenance.",
+      "files": [
+        "src/types.py",
+        "src/io.py"
+      ],
+      "acceptance_criteria": [
+        "load_csv(path) returns pandas.DataFrame and raises FileNotFoundError when missing",
+        "write_dataframe(df, path) writes CSV and creates parent dirs",
+        "ModelResponse dataclass defined and importable"
+      ],
+      "estimated_minutes": 60,
+      "dependencies": [],
+      "status": "done"
+    },
+    {
+      "id": 2,
+      "title": "Create models package (stable LM API)",
+      "description": "Refactor experiment models.py into src/models/impl.py or create adapter. Provide LanguageModel base class, GoogleModel, OllamaModel, and get_model_instance factory returning LanguageModel instances that produce types.ModelResponse.",
+      "files": [
+        "src/models/__init__.py",
+        "src/models/impl.py"
+      ],
+      "acceptance_criteria": [
+        "get_model_instance(identifier, config, api_params) returns LanguageModel",
+        "LanguageModel.generate(...) returns ModelResponse",
+        "No remaining imports of old data_structures module in runtime components"
+      ],
+      "estimated_minutes": 120,
+      "dependencies": [1],
+      "status": "done"
+    },
+    {
+      "id": 3,
+      "title": "Implement analyst component (analyst.py)",
+      "description": "Move existing analytics into src/analyst.py implementing analyze_df(df, group_col) and run_from_config(cfg). Use io.load_csv and io.write_dataframe.",
+      "files": [
+        "src/analyst.py"
+      ],
+      "acceptance_criteria": [
+        "analyze_df returns grouped DataFrame of rating column means",
+        "run_from_config({'input_csv', 'output_csv', 'group_col'}) returns {success:true, artifacts:[out]}",
+        "CLI wrapper run(argv) exists and returns exit codes"
+      ],
+      "estimated_minutes": 90,
+      "dependencies": [1],
+      "status": "done"
+    },
+    {
+      "id": 4,
+      "title": "Create inference component (inference.py)",
+      "description": "Implement run_from_config(cfg) that reads prompts/input CSV, uses models.get_model_instance to generate outputs, writes raw_outputs CSV with consistent schema, and returns artifacts.",
+      "files": [
+        "src/inference.py"
+      ],
+      "acceptance_criteria": [
+        "run_from_config handles input_csv -> output_csv",
+        "Uses models.get_model_instance and captures ModelResponse fields into output CSV",
+        "Provides artifacts list and success flag"
+      ],
+      "estimated_minutes": 180,
+      "dependencies": [1,2],
+      "status": "done"
+    },
+    {
+      "id": 5,
+      "title": "Create judge component skeleton (judge.py)",
+      "description": "Implement judge.run_from_config(cfg) to load raw outputs, apply judge templates/criteria, append *_rating and *_justification columns, write judged CSV, return artifacts.",
+      "files": [
+        "src/judge.py"
+      ],
+      "acceptance_criteria": [
+        "run_from_config accepts input_csv, template_dir, output_csv",
+        "Appends rating columns with numeric/coerced values",
+        "Returns success and artifacts list"
+      ],
+      "estimated_minutes": 240,
+      "dependencies": [1,2,4],
+      "status": "done"
+    },
+    {
+      "id": 6,
+      "title": "Add orchestrator and top-level CLI",
+      "description": "Implement src/orchestrator.py that loads YAML config, validates steps, dispatches to component.run_from_config, records artifacts and provenance. Create src/cli.py as thin entrypoint mapping subcommands (orchestrate).",
+      "files": [
+        "src/orchestrator.py",
+        "src/cli.py",
+        "configs/run_example.yaml"
+      ],
+      "acceptance_criteria": [
+        "orchestrate(config_path) executes enabled steps and returns exit code",
+        "Writes provenance metadata for produced artifacts",
+        "CLI wrapper runs orchestrator and returns appropriate exit codes"
+      ],
+      "estimated_minutes": 120,
+      "dependencies": [1,3,4,5],
+      "status": "done"
+    },
+    {
+      "id": 7,
+      "title": "Migrate or adapt existing experiment models.py",
+      "description": "Either move the experiment-level models.py into src/models/impl.py or create an adapter that wraps it to new models package. Prefer adapter for minimal disruption.",
+      "files": [
+        "3_experiments/scholar_two_class_run/src/models.py",
+        "src/models/adapters/experiment_adapter.py"
+      ],
+      "acceptance_criteria": [
+        "inference component can call get_model_instance using experiment model identifiers",
+        "No broken imports in experiments after adapter creation"
+      ],
+      "estimated_minutes": 90,
+      "dependencies": [2],
+      "status": "done"
+    },
+    {
+      "id": 8,
+      "title": "Add provenance, logging, and artifact metadata",
+      "description": "Ensure each component writes .meta.json beside artifacts with run config, git sha, timestamp. Add structured logging across modules.",
+      "files": [
+        "src/io.py",
+        "src/orchestrator.py",
+        "src/analyst.py",
+        "src/inference.py",
+        "src/judge.py"
+      ],
+      "acceptance_criteria": [
+        ".meta.json files are written for artifacts",
+        "Logs include step start/end, duration, and errors",
+        "Components do not call sys.exit() directly"
+      ],
+      "estimated_minutes": 120,
+      "dependencies": [1,6],
+      "status": "done"
+    },
+    {
+      "id": 9,
+      "title": "Add unit tests and CI smoke tests",
+      "description": "Create pytest tests for types, io, analyst, and adapters. Add a small CI workflow or Makefile target to run tests.",
+      "files": [
+        "src/tests/test_types.py",
+        "src/tests/test_io.py",
+        "src/tests/test_analyst.py",
+        ".github/workflows/ci.yaml"
+      ],
+      "acceptance_criteria": [
+        "pytest runs and core tests pass locally",
+        "CI workflow executes tests on push"
+      ],
+      "estimated_minutes": 240,
+      "dependencies": [1,3,7],
+      "status": "done"
+    }
+  ],
+  "metadata": {
+    "completed": true,
+    "updated_by": "GitHub Copilot",
+    "updated_at": "2025-08-19T18:20:00Z",
+    "repo_root": "/home/johnro/sop-research/gnosis"
+  }
+}

@@ -1,0 +1,23 @@
+# ...new file...
+{ example run config demonstrating steps and per-step cfg }
+
+steps:
+  - name: inference_step
+    component: inference
+    config:
+      input_csv: "data/prompts.csv"
+      output_csv: "artifacts/inference_raw.csv"
+      default_model: "google:default"
+  - name: judge_step
+    component: judge
+    config:
+      input_csv: "artifacts/inference_raw.csv"
+      output_csv: "artifacts/inference_judged.csv"
+      template_dir: "configs/judge_templates"
+  - name: analyst_step
+    component: analyst
+    config:
+      input_csv: "artifacts/inference_judged.csv"
+      output_csv: "artifacts/analysis_summary.csv"
+      group_col: "model"
+      rating_col: "judge_rating"

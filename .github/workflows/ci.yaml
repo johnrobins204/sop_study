@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pytest pyyaml
+      - name: Run unit tests
+        run: |
+          pytest -q
+      - name: Run validator (smoke)
+        run: |
+          # run a single non-destructive validator to smoke-test the pipeline pieces
+          python scripts/validate_task8.py
